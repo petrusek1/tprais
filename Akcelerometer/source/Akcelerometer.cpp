@@ -33,35 +33,144 @@
  * @brief   Application entry point.
  */
 #include <stdio.h>
+#include <stdint-gcc.h>
+#include <tgmath.h>
 #include "board.h"
 #include "peripherals.h"
 #include "pin_mux.h"
 #include "clock_config.h"
 #include "MKL25Z4.h"
 #include "fsl_debug_console.h"
-/* TODO: insert other include files here. */
+#include "fsl_pit.h"
 
-/* TODO: insert other definitions and declarations here. */
 
-/*
- * @brief   Application entry point.
- */
-int main(void) {
+#include "MMA8451Q/MMA8451Q.h"
+#include "Timer/Timer.h"
 
-  	/* Init board hardware. */
-    BOARD_InitBootPins();
-    BOARD_InitBootClocks();
-    BOARD_InitBootPeripherals();
-  	/* Init FSL debug console. */
-    BOARD_InitDebugConsole();
+#define ACCELL_ADDRESS 0x1DU
 
-    PRINTF("Hello World\n");
+#define PI 		(float)		3.1415
+#define Fc 		(float)		5
+#define DELTA_T (float)		0.1
 
-    /* Force the counter to be placed into memory. */
-    volatile static int i = 0 ;
-    /* Enter an infinite loop, just incrementing a counter. */
-    while(1) {
-        i++ ;
-    }
+static const float alfa = (2*PI*DELTA_T*Fc)/((2*PI*DELTA_T*Fc) + 1) ; // low pass
+
+// ** Predefinitions **
+
+#if defined(__cplusplus)
+extern "C" {
+#endif
+	volatile int flagIRQ = 0;
+	//surove dáta
+	float zakladneData[3]= {0, 0, 0};
+	//filter na dáta
+	float odfiltrovaneData[3] = {0,0,0};
+	//filter na stare dáta
+	static float stareodfiltrovaneData[3] = {0,0,0};
+	// pre uhly
+	float allfa, beta, gama = 0;
+	void PIT_IRQHandler();
+} //extern C
+
+
+
+//inicializacia
+void BOARD_INIT();
+//filter jednej osi
+float filterOneAxis(float input, float oldOutput);
+//filter
+void filter(float* zakladneData, float *stareData, float* noveData);
+//ulhy
+float uhly(float* data, uint8_t axis);
+
+MMA8451Q* accel;
+
+
+
+// *** Main function *** inicializacia
+int main(void)
+{
+
+    BOARD_INIT();
+    Timer timer;
+    accel = new MMA8451Q(ACCELL_ADDRESS);
+    accel->init();
+
+    timer.setTime((uint64_t)DELTA_T * 100);
+    timer.starTimer();
+
+    while(1)
+    {}
+
     return 0 ;
+}
+
+
+//inicializacia dosky, ...
+void BOARD_INIT()
+{
+	/* Init board hardware. */
+	BOARD_InitBootPins();
+	BOARD_InitBootClocks();
+	BOARD_InitBootPeripherals();
+	/* Init FSL debug console. */
+	BOARD_InitDebugConsole();
+}
+
+
+
+void PIT_IRQHandler(){
+	//vyčistenie
+	PIT_ClearStatusFlags(PIT, kPIT_Chnl_0, kPIT_TimerFlag);
+
+	accel->getAccAllAxis(zakladneData);
+	filter(zakladneData, stareodfiltrovaneData, odfiltrovaneData);
+
+
+	/* Vypis gravitacne sily */
+	//	PRINTF("x: %.3f,y: %.3f,z: %.3f \n\r",odfiltrovaneData[0] , odfiltrovaneData[1], odfiltrovaneData[2]);
+
+	/*Vypis zrychlenie na jednolivych osiach*/
+	PRINTF("x: %.3f y: %.3f z: %.3f \n\r",stareodfiltrovaneData[0] , stareodfiltrovaneData[1], stareodfiltrovaneData[2]);
+
+
+
+    allfa = uhly(stareodfiltrovaneData, 1);
+	beta = uhly(stareodfiltrovaneData, 2);
+	gama = uhly(stareodfiltrovaneData, 3);
+
+	/*Vypis uhol naklonu*/
+	//PRINTF("a: %.1f° b: %.1f° g:  %.1f° \n\r",allfa, beta, gama);
+}
+
+//filter pre jednu os
+float filterOneAxis(float input, float oldOutput)
+{
+		return ((1 -alfa) * oldOutput + alfa * input);
+}
+
+
+//metoda na filtrovanie dát
+
+void filter(float* pZakladneData, float *pStareData, float* pNoveData)
+{
+	for(int i = 0; i < 3; i++)
+	{
+		pNoveData[i] = (((1 -alfa) * pStareData[i]) + (alfa * pZakladneData[i]));  //LOW
+		pStareData[i] = pNoveData[i];
+		pNoveData[i] = pStareData[i] - pNoveData[i];
+	}
+
+}
+
+
+//metoda na určenie uhlov náklonu
+float uhly(float* data, uint8_t axis){
+	if(axis == 1){
+		return (180/PI) * atanf(data[0]/(sqrtf( powf(data[1],2) + powf(data[2],2) )));
+	} else if(axis == 2){
+		return (180/PI) * atanf(data[1]/(sqrtf( powf(data[0],2) + powf(data[2],2) )));
+	} else {
+		return (180/PI) * atanf(data[2]/(sqrtf( powf(data[1],2) + powf(data[0],2) )));
+	}
 }

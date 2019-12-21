@@ -96,7 +96,7 @@ public:
     */
    void getAccAllAxis(float * res);
 
- private:
+ public:
    I2C m_I2C;
    int m_addr;
    int16_t getAccAxis(uint8_t addr);
